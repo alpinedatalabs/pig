@@ -42,7 +42,7 @@ import org.apache.pig.impl.plan.VisitorException;
 import org.apache.pig.impl.util.Utils;
 
 public class LimitAdjuster extends MROpPlanVisitor {
-    ArrayList<MapReduceOper> opsToAdjust = new ArrayList<MapReduceOper>();  
+    ArrayList<MapReduceOper> opsToAdjust = new ArrayList<MapReduceOper>();
     PigContext pigContext;
     NodeIdGenerator nig;
     private String scope;
@@ -65,12 +65,18 @@ public class LimitAdjuster extends MROpPlanVisitor {
         // TODO: This new MR job can be skipped if at runtime we discover that
         // its parent only has a single reducer (mr.requestedParallelism!=1).
         // This check MUST happen at runtime since that's when reducer estimation happens.
-        if ((mr.limit!=-1 || mr.limitPlan!=null) )
+
+        // Alpine Data Labs: unfortunately, the change in PIG-2652 resulted in multiple MR
+        // jobs when using LIMIT. See PIG-2675. The ideal change for this issue is, according
+        // to PIG-2675 is to possibly have another walker go and remove that. Since our use of
+        // Pig is fairly limited, the performance optimization gained by PIG-2652 does not offset
+        // the double MR job so, for our purposes, reinstate the check here for requested parallelism.
+        if ((mr.limit!=-1 || mr.limitPlan!=null)  && mr.requestedParallelism!=1)
         {
             opsToAdjust.add(mr);
         }
     }
-    
+
     public void adjust() throws IOException, PlanException
     {
         for (MapReduceOper mr:opsToAdjust)
@@ -78,7 +84,7 @@ public class LimitAdjuster extends MROpPlanVisitor {
             if (mr.reducePlan.isEmpty()) continue;
             List<PhysicalOperator> mpLeaves = mr.reducePlan.getLeaves();
             if (mpLeaves.size() != 1) {
-                int errCode = 2024; 
+                int errCode = 2024;
                 String msg = "Expected reduce to have single leaf. Found " + mpLeaves.size() + " leaves.";
                 throw new MRCompilerException(msg, errCode, PigException.BUG);
             }
@@ -87,13 +93,13 @@ public class LimitAdjuster extends MROpPlanVisitor {
                 if (!(mpLeaf instanceof POStore)) {
                     int errCode = 2025;
                     String msg = "Expected leaf of reduce plan to " +
-                        "always be POStore. Found " + mpLeaf.getClass().getSimpleName();
+                            "always be POStore. Found " + mpLeaf.getClass().getSimpleName();
                     throw new MRCompilerException(msg, errCode, PigException.BUG);
                 }
             }
             FileSpec oldSpec = ((POStore)mpLeaf).getSFile();
             boolean oldIsTmpStore = ((POStore)mpLeaf).isTmpStore();
-            
+
             FileSpec fSpec = new FileSpec(FileLocalizer.getTemporaryPath(pigContext).toString(),
                     new FuncSpec(Utils.getTmpFileCompressorName(pigContext)));
             POStore storeOp = (POStore) mpLeaf;
@@ -125,25 +131,25 @@ public class LimitAdjuster extends MROpPlanVisitor {
             //      by POLimit, see PIG-2231
             splitReducerForLimit(limitAdjustMROp, mr);
 
-            if (mr.isGlobalSort()) 
+            if (mr.isGlobalSort())
             {
                 limitAdjustMROp.setLimitAfterSort(true);
                 limitAdjustMROp.setSortOrder(mr.getSortOrder());
             }
-            
+
             POStore st = new POStore(new OperatorKey(scope,nig.getNextNodeId(scope)));
             st.setSFile(oldSpec);
             st.setIsTmpStore(oldIsTmpStore);
             st.setSchema(((POStore)mpLeaf).getSchema());
             st.setSignature(((POStore)mpLeaf).getSignature());
-            
+
             limitAdjustMROp.reducePlan.addAsLeaf(st);
             limitAdjustMROp.requestedParallelism = 1;
             limitAdjustMROp.setLimitOnly(true);
-            
+
             List<MapReduceOper> successorList = mPlan.getSuccessors(mr);
             MapReduceOper successors[] = null;
-            
+
             // Save a snapshot for successors, since we will modify MRPlan, 
             // use the list directly will be problematic
             if (successorList!=null && successorList.size()>0)
@@ -153,17 +159,17 @@ public class LimitAdjuster extends MROpPlanVisitor {
                 for (MapReduceOper op:successorList)
                     successors[i++] = op;
             }
-            
+
             // Process UDFs
             for (String udf : mr.UDFs) {
                 if (!limitAdjustMROp.UDFs.contains(udf)) {
                     limitAdjustMROp.UDFs.add(udf);
                 }
             }
-            
+
             mPlan.add(limitAdjustMROp);
             mPlan.connect(mr, limitAdjustMROp);
-            
+
             if (successors!=null)
             {
                 for (int i=0;i<successors.length;i++)
@@ -171,22 +177,22 @@ public class LimitAdjuster extends MROpPlanVisitor {
                     MapReduceOper nextMr = successors[i];
                     if (nextMr!=null)
                         mPlan.disconnect(mr, nextMr);
-                    
+
                     if (nextMr!=null)
-                        mPlan.connect(limitAdjustMROp, nextMr);                        
+                        mPlan.connect(limitAdjustMROp, nextMr);
                 }
             }
         }
     }
-    
+
     // Move all operators between POLimit and POStore in reducer plan 
     // from firstMROp to the secondMROp
     private void splitReducerForLimit(MapReduceOper secondMROp,
-            MapReduceOper firstMROp) throws PlanException, VisitorException {
-                    
+                                      MapReduceOper firstMROp) throws PlanException, VisitorException {
+
         PhysicalOperator op = firstMROp.reducePlan.getRoots().get(0);
         assert(op instanceof POPackage);
-        
+
         while (true) {
             List<PhysicalOperator> succs = firstMROp.reducePlan
                     .getSuccessors(op);
@@ -198,7 +204,7 @@ public class LimitAdjuster extends MROpPlanVisitor {
                 break;
             }
         }
-        
+
         POLimit pLimit2 = new POLimit(new OperatorKey(scope,nig.getNextNodeId(scope)));
         pLimit2.setLimit(firstMROp.limit);
         pLimit2.setLimitPlan(firstMROp.limitPlan);
@@ -210,17 +216,17 @@ public class LimitAdjuster extends MROpPlanVisitor {
             List<PhysicalOperator> succs = firstMROp.reducePlan
                     .getSuccessors(op);
             op = succs.get(0);
-            
+
             firstMROp.reducePlan.removeAndReconnect(opToMove);
             secondMROp.reducePlan.addAsLeaf(opToMove);
-            
+
         }
     }
-    
+
     private void connectMapToReduceLimitedSort(MapReduceOper mro, MapReduceOper sortMROp) throws PlanException, VisitorException
     {
         POLocalRearrange slr = (POLocalRearrange)sortMROp.mapPlan.getLeaves().get(0);
-        
+
         POLocalRearrange lr = null;
         try {
             lr = slr.clone();
@@ -229,9 +235,9 @@ public class LimitAdjuster extends MROpPlanVisitor {
             String msg = "Error cloning POLocalRearrange for limit after sort";
             throw new MRCompilerException(msg, errCode, PigException.BUG, e);
         }
-        
+
         mro.mapPlan.addAsLeaf(lr);
-        
+
         POPackage spkg = (POPackage)sortMROp.reducePlan.getRoots().get(0);
 
         POPackage pkg = null;
