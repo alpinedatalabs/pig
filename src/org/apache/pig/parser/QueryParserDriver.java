@@ -177,7 +177,9 @@ public class QueryParserDriver {
         LogicalPlan plan = null;
 
         ScriptState ss = ScriptState.get();
-        CommonTokenStream tokenStream = tokenize(query, ss.getFileName());
+		//alpine hac:k here to bypass the null pointer exception
+		//DEV-13396 Row filter fails with a null pointer exception.
+        CommonTokenStream tokenStream = tokenize(query, ss == null? "": ss.getFileName());
 
         Tree ast = parse( tokenStream );
         ast = expandMacro( ast );
